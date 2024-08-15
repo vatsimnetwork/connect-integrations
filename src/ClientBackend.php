@@ -28,18 +28,28 @@ class ClientBackend extends ExternalUserAuthenticationBackend
     private function signIn(VatsimResourceOwner $resourceOwner): ?ClientSession
     {
         $username = 'c'.$resourceOwner->getId();
+
+        /** @var ClientAccount $acct */
         $acct = ClientAccount::lookupByUsername($username);
         if ($acct && $acct->getId()) {
-            return new ClientSession(new EndUser($acct->getUser()));
+            $session = new ClientSession(new EndUser($acct->getUser()));
         } else {
-            $info['name'] = $resourceOwner->getFullName();
-            $info['email'] = $resourceOwner->getEmail();
-            $info['cid'] = $resourceOwner->getId();
+            $request = new ClientCreateRequest($this, $username, [
+                'name' => $resourceOwner->getFullName(),
+                'email' => $resourceOwner->getEmail(),
+                'cid' => $resourceOwner->getId(),
+            ]);
 
-            $client = new ClientCreateRequest($this, $username, $info);
-
-            return $client->attemptAutoRegister();
+            $session = $request->attemptAutoRegister();
         }
+
+        // Delete any other accounts for the same user
+        ClientAccount::objects()
+            ->filter(['user_id' => $session->getId()])
+            ->exclude(['username' => $username])
+            ->delete();
+
+        return $session;
     }
 
     private function redirectTo(): string
