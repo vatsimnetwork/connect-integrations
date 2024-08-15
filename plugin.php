@@ -4,7 +4,7 @@ use Vatsim\Osticket\Auth\Plugin;
 
 return [
     'id' => 'vatsim:oauth2',
-    'version' => '1.0',
+    'version' => '1.1',
     'ost_version' => '1.16',
     'name' => 'VATSIM Authentication',
     'author' => 'VATSIM Tech Team <tech@vatsim.net>',
