@@ -3,16 +3,20 @@
 namespace Vatsim\Osticket\Auth;
 
 use ClientAccount;
-use ClientCreateRequest;
 use ClientSession;
 use EndUser;
 use ExternalUserAuthenticationBackend;
 use osTicket;
+use User;
+use UserAccount;
+use UserAccountStatus;
 use Vatsim\OAuth2\Client\Provider\VatsimResourceOwner;
 
 class ClientBackend extends ExternalUserAuthenticationBackend
 {
     use BackendTrait;
+
+    private const USER_STATUS = UserAccountStatus::CONFIRMED | UserAccountStatus::FORBID_PASSWD_RESET;
 
     public static $id = 'vatsim.client';
 
@@ -27,29 +31,55 @@ class ClientBackend extends ExternalUserAuthenticationBackend
 
     private function signIn(VatsimResourceOwner $resourceOwner): ?ClientSession
     {
+        // Get all the details ready.
         $username = 'c'.$resourceOwner->getId();
+        $userDetails = [
+            'name' => $resourceOwner->getFullName(),
+            'email' => $resourceOwner->getEmail(),
+            'cid' => $resourceOwner->getId(),
+        ];
 
-        /** @var ClientAccount $acct */
-        $acct = ClientAccount::lookupByUsername($username);
-        if ($acct && $acct->getId()) {
-            $session = new ClientSession(new EndUser($acct->getUser()));
+        // First, try to find a UserAccount by VATSIM ID.
+        /** @var UserAccount $acct */
+        $acct = UserAccount::lookupByUsername($username);
+        if ($acct) {
+            // If we found one, get the User.
+            /** @var User $user */
+            $user = $acct->getUser();
+
+            // Upsert the User.
+            $user->setAll($userDetails);
+            $user->save(true);
         } else {
-            $request = new ClientCreateRequest($this, $username, [
-                'name' => $resourceOwner->getFullName(),
-                'email' => $resourceOwner->getEmail(),
-                'cid' => $resourceOwner->getId(),
-            ]);
+            // If we didn't find one, find or create a User by email.
+            /** @var User $user */
+            $user = User::fromVars($userDetails);
 
-            $session = $request->attemptAutoRegister();
+            // Now that we have a User, try to get its UserAccount.
+            /** @var UserAccount $acct */
+            $acct = $user->getAccount();
         }
 
-        // Delete any other accounts for the same user
-        ClientAccount::objects()
-            ->filter(['user_id' => $session->getId()])
-            ->exclude(['username' => $username])
-            ->delete();
+        // If we still don't have a UserAccount, instantiate a new one.
+        if (! $acct) {
+            /** @var osTicket $ost */
+            global $ost;
 
-        return $session;
+            $acct = new UserAccount([
+                'user_id' => $user->getId(),
+                'timezone' => $ost->getConfig()->getDefaultTimezone(),
+            ]);
+        }
+
+        // Upsert the UserAccount.
+        $acct->setAll([
+            'status' => $acct->get('status', 0) | self::USER_STATUS,
+            'username' => $username,
+            'passwd' => null,
+        ]);
+        $acct->save();
+
+        return new ClientSession(new EndUser($user));
     }
 
     private function redirectTo(): string
